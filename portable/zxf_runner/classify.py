@@ -28,7 +28,7 @@ CONTENT_LIST_STRUCTURE = [
 SIGNAL_HIGH_HINTS_IN_FILENAME = [r"\d{3}", r"强基", r"民办", r"复读", r"选科", r"考研"]
 SIGNAL_LOW_HINTS_IN_FILENAME = ["情绪", "焦虑", "吐槽", "崩溃", "抑郁暗恋"]
 
-BV_RE = re.compile(r"BV[A-Za-z0-9]{10}")
+BV_RE = re.compile(r"BV[A-Za-z0-9]{10}(?:S\d{2})?")
 
 
 def extract_bv(filename: str) -> str | None:

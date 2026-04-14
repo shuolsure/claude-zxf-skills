@@ -9,7 +9,7 @@ from pathlib import Path
 
 from .config import INDEX_PATH, SRC_DIR
 
-BV_RE = re.compile(r"BV[A-Za-z0-9]{10}")
+BV_RE = re.compile(r"BV[A-Za-z0-9]{10}(?:S\d{2})?")
 KEYWORD_FIRST_HINTS = ["家长", "孩子", "闺女", "儿子", "姑娘", "女儿", "分"]
 
 

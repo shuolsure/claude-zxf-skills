@@ -57,6 +57,18 @@ python -m zxf_runner precheck
 5) python -m zxf_runner report
 ```
 
+### 整场切片（"切 BVxxx" / "分片 BVxxx"）
+
+```
+1) python -m zxf_runner segment-plan --bv BVxxx         # 看规则报告
+2) python -m zxf_runner prepare-segment-refine --bv BVxxx
+   → {system_prompt, user_content, target_path}
+3) 按 system_prompt 产 plan JSON（segments[{title,start,end,content_type_hint}]）
+   → Write target_path
+4) python -m zxf_runner finalize-segment --bv BVxxx --plan-json <target_path>
+   → runner 切原文、建索引、原整场标 segmented
+```
+
 ### 独白流程
 
 ```

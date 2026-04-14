@@ -21,6 +21,7 @@ from . import classify as cls_mod
 from . import index as idx_mod
 from . import prepare as prep_mod
 from . import reconcile as rec_mod
+from . import segment as seg_mod
 from . import validate as val_mod
 from .config import (
     CONFIG_DIR_DEFAULT, DIALOG_DIR, INDEX_PATH, MONOLOG_DIR,
@@ -224,6 +225,52 @@ def cmd_finalize(args) -> int:
     return 0
 
 
+# ---------- 整场切片（Mode B）----------
+
+def cmd_segment_plan(args) -> int:
+    ensure_dirs()
+    plan = seg_mod.build_segment_plan(args.bv)
+    _emit(plan)
+    return 0 if "error" not in plan else 1
+
+
+def cmd_prepare_segment_refine(args) -> int:
+    ensure_dirs()
+    prompts_dir = Path(args.prompts_dir)
+    item = idx_mod.get(args.bv)
+    if not item:
+        _emit({"error": f"BV {args.bv} 不在 index"})
+        return 1
+    item = {"bv": args.bv, **item}
+    plan = seg_mod.build_segment_plan(args.bv)
+    if "error" in plan:
+        _emit(plan)
+        return 1
+    packet = prep_mod.build_segment_refine_packet(plan, item, prompts_dir)
+    packet["instructions"] = (
+        "按 system_prompt 读完整原文+候选段，产最终切片 plan JSON，"
+        "Write 到 target_path，然后调 `finalize-segment --bv <bv> --plan-json <target_path>`。"
+    )
+    _emit(packet)
+    return 0
+
+
+def cmd_finalize_segment(args) -> int:
+    ensure_dirs()
+    plan_path = Path(args.plan_json)
+    if not plan_path.exists():
+        _emit({"ok": False, "error": f"plan 文件不存在：{plan_path}"})
+        return 1
+    try:
+        plan = json.loads(plan_path.read_text(encoding="utf-8"))
+    except json.JSONDecodeError as e:
+        _emit({"ok": False, "error": f"plan JSON 解析失败：{e}"})
+        return 1
+    result = seg_mod.finalize_segments(args.bv, plan)
+    _emit(result)
+    return 0 if result.get("ok") else 1
+
+
 # ---------- Mode A（原自驱模式，需 API key）----------
 
 def cmd_structure(args) -> int:
@@ -322,6 +369,20 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("--status", required=True)
     p.add_argument("--reason", default=None)
     p.set_defaults(func=cmd_finalize)
+
+    # ---- 整场切片 ----
+    p = sub.add_parser("segment-plan", help="[Mode B] 整场启发式过滤+规则粗切，出候选段报告")
+    p.add_argument("--bv", required=True)
+    p.set_defaults(func=cmd_segment_plan)
+
+    p = sub.add_parser("prepare-segment-refine", help="[Mode B] 出整场精修工作包")
+    p.add_argument("--bv", required=True)
+    p.set_defaults(func=cmd_prepare_segment_refine)
+
+    p = sub.add_parser("finalize-segment", help="[Mode B] 按 plan 切原文、落盘、建索引")
+    p.add_argument("--bv", required=True)
+    p.add_argument("--plan-json", required=True)
+    p.set_defaults(func=cmd_finalize_segment)
 
     # ---- Mode A ----
     p = sub.add_parser("structure", help="[Mode A] 需 API key，runner 自调 LLM")

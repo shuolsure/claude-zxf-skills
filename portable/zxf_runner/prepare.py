@@ -8,7 +8,7 @@ from __future__ import annotations
 import json
 from pathlib import Path
 
-from .config import DIALOG_DIR, DIALOG_DRAFT_DIR, MONOLOG_DIR
+from .config import DIALOG_DIR, DIALOG_DRAFT_DIR, MONOLOG_DIR, OUT_DIR
 
 
 def _read_prompt(prompts_dir: Path, name: str) -> str:
@@ -71,6 +71,62 @@ def build_dialog_refine_packet(
         "targets": targets,
         "refine_model_name": refine_model_name,
         "next_step": "写每份到对应 target_path，逐份调 `check`；全过后逐份调 `finalize --status done`",
+    }
+
+
+def build_segment_refine_packet(plan: dict, item: dict, prompts_dir: Path) -> dict:
+    """整场切片精修工作包。
+
+    plan 是 segment.build_segment_plan 的产物（含 filter + candidates）。
+    把原文 + 启发式报告 + 候选段一起打包给主 agent 做最终切分。
+    """
+    bv = item["bv"]
+    system = _read_prompt(prompts_dir, "segment_refine.md")
+    original = _read_text(item["file_path"])
+
+    # 候选段简报（不塞 preview 以免 context 爆）
+    cand_brief = [
+        {
+            "idx": c["idx"],
+            "start": c["start"],
+            "end": c["end"],
+            "char_count": c["char_count"],
+            "split_reason": c["split_reason"],
+            "needs_refine": c["needs_refine"],
+        }
+        for c in plan.get("candidates", [])
+    ]
+    noise_brief = [
+        {"start": n["start"], "end": n["end"], "reason": n.get("sample_reason", "")}
+        for n in plan.get("filter", {}).get("noise_segments", [])
+    ]
+
+    user = (
+        f"parent_bv: {bv}\n"
+        f"original_length: {len(original)}\n\n"
+        "== noise_segments（启发式，仅参考）==\n"
+        + json.dumps(noise_brief, ensure_ascii=False) + "\n\n"
+        "== candidates（规则粗切，仅参考）==\n"
+        + json.dumps(cand_brief, ensure_ascii=False) + "\n\n"
+        "== original_text ==\n"
+        "<<<\n" + original + "\n>>>\n\n"
+        "请按 system_prompt 产最终切分 JSON。"
+    )
+
+    target_dir = OUT_DIR / "segments" / "_plans"
+    target_dir.mkdir(parents=True, exist_ok=True)
+    target_path = target_dir / f"{bv}_plan.json"
+
+    return {
+        "bv": bv,
+        "stage": "segment_refine",
+        "system_prompt": system,
+        "user_content": user,
+        "target_path": str(target_path),
+        "next_step": (
+            "Write 最终 plan JSON 到 target_path，然后调 "
+            f"`python -m zxf_runner finalize-segment --bv {bv} --plan-json {target_path}`"
+        ),
     }
 
 

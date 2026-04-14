@@ -57,6 +57,26 @@ Step 5 — 汇报：
   python -m zxf_runner report
 ```
 
+### 整场切片流程（Mode B）
+
+**"切 BVxxx" / "分片 BVxxx"**：
+
+```
+Step 1 — 看规则粗切报告：
+  python -m zxf_runner segment-plan --bv BVxxx
+  → {filter, candidates}
+
+Step 2 — 取精修工作包：
+  python -m zxf_runner prepare-segment-refine --bv BVxxx
+  → {system_prompt, user_content（含原文+noise+candidates）, target_path}
+
+Step 3 — 产最终 plan JSON（含 segments[{title,start,end,content_type_hint,rationale}]）：
+  a. 按 system_prompt 处理
+  b. 写到 target_path
+  c. python -m zxf_runner finalize-segment --bv BVxxx --plan-json <target_path>
+  → runner 自动切原文写新 txt、classify 新片段入 index、原整场标 segmented
+```
+
 ### 独白/专题流程
 
 ```

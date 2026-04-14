@@ -25,6 +25,8 @@ python -m zxf_runner precheck
 | "跑 N 份对话片段" | Mode B 对话流程（见下） |
 | "跑 BVxxx" | Mode B 单 BV |
 | "跑 N 份独白" | Mode B 独白流程（见下） |
+| "切 BVxxx" / "分片 BVxxx" | Mode B 整场切片流程（见下） |
+| "查切片计划 BVxxx" | `python -m zxf_runner segment-plan --bv BVxxx` |
 | "回填" | `python -m zxf_runner reconcile` |
 | "查进度" | `python -m zxf_runner report` |
 
@@ -89,6 +91,44 @@ python -m zxf_runner prepare-monolog --limit N
 ```
 
 对每个 packet：产 JSON → Write → check → `finalize --status done`。无精修阶段。
+
+## Mode B 整场切片流程（把 `segment_type=整场` 切成 N 份片段）
+
+适用场景：用户说"切 BVxxx"、"分片 BVxxx"，或想把 index 里 `processed=skipped / segment_type=整场` 的长文件盘活。
+
+### Step 1：看规则粗切报告
+
+```bash
+python -m zxf_runner segment-plan --bv BVxxx
+```
+
+返回 `{filter: {...}, candidates: [...]}`。噪声比率 > 50% 或候选段 < 2 时提醒用户可能是纯带货场，考虑标 skipped 不再切。
+
+### Step 2：取精修工作包
+
+```bash
+python -m zxf_runner prepare-segment-refine --bv BVxxx
+```
+
+返回 `{system_prompt, user_content, target_path}`。`user_content` 包含原文 + noise_segments + candidates。
+
+### Step 3：产最终切片 plan
+
+主 agent 按 system_prompt 产出 plan JSON（含 `segments: [{title, start, end, content_type_hint, rationale}]`），Write 到 `target_path`。
+
+### Step 4：落盘
+
+```bash
+python -m zxf_runner finalize-segment --bv BVxxx --plan-json <target_path>
+```
+
+runner 自动：按 offset 切原文 → 写 N 个新 txt（命名 `{date}_{title}_{BV}S{NN}.txt`）到源目录 → classify 新片段入 index → 原整场标 `processed=segmented`。
+
+### Step 5：下游
+
+新片段进 `pending` 队列，可立刻跑 `prepare-dialog-draft` / `prepare-monolog`。
+
+**注意**：`segment.py` 的带货词表保守；若明显漏过带货，在 plan 的 `dropped` 字段补，不要强塞进 segments。
 
 ## 关键约束
 
