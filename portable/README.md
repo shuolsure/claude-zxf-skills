@@ -1,24 +1,33 @@
 # zxf-runner：CLI 无关的通用 skill
 
-张雪峰转录处理的通用版本。所有业务逻辑下沉到 Python runner，CLI 层只做"用户意图 → 命令行参数"的翻译。任何能跑 bash 的 AI CLI（Claude Code / Codex / opencode / 自己搭的）都能用。
+张雪峰转录处理的通用版本。业务逻辑（拆活/校验/索引/分类）在 Python runner，LLM 调用由 CLI 的主 agent 负责。任何能跑 bash 的 AI CLI（Claude Code / Codex / opencode）都能用。
 
-## 为什么做这个版本
+## 两种工作模式
 
-`../claude-code/` 版本绑死 Claude Code 的 subagent 并发机制。本版本改成：
+### Mode B：工作包模式（默认推荐，**无需 API key**）
 
-- runner 内部直接调 LLM API（anthropic / openai / ollama）
-- 默认顺序执行，符合大多 CLI 只有单 agent 的现实
-- 可选 `--parallel N` 线程池并发，不依赖 CLI 的 subagent 能力
+runner 拆活成"工作包"（含 prompt + 原文 + 目标路径），主 agent 用自己的 AI 能力产 JSON 写盘，再调 runner 校验+入库。
 
-详见 `../reports/skill_portable_plan.md`（需自行查阅上一层仓库 reports 目录）。
+- ✅ 用 CLI 订阅/内置 AI，不掏 API key
+- ✅ Claude Code / Codex / opencode 一套代码
+- ⚠ 主 agent 在一次对话里会连续做 N 次 LLM 思考，context 膨胀；N > 5 建议拆多轮
+
+### Mode A：自驱模式（需 API key）
+
+runner 内部直接调 anthropic/openai/ollama API，全程无需主 agent 介入 LLM 推理。
+
+- ✅ 高吞吐，支持 `--parallel`
+- ❌ 需要 `ANTHROPIC_API_KEY` 或 `OPENAI_API_KEY`，按调用付费
+
+**没 key 就只用 Mode B。** 下面 "常用命令" 两种都列了。
 
 ## 安装
 
 ```bash
 cd portable
-pip install -e ".[all]"          # 装 runner + anthropic + openai SDK
-# 或按需最小化
-pip install -e ".[anthropic]"    # 只用 Claude
+pip install -e .                 # Mode B 够用（只需 pyyaml）
+pip install -e ".[anthropic]"    # + Mode A anthropic
+pip install -e ".[all]"          # + Mode A 全部 provider
 ```
 
 ## 配置
@@ -39,40 +48,56 @@ export ZXF_OUT_DIR=/path/to/zxftrans_structured
 
 ## 常用命令
 
+### 共用（两种模式都能用）
+
 ```bash
-# 环境检查
 python -m zxf_runner precheck
-
-# 分类 30 份（keyword-first 策略，对话优先）
 python -m zxf_runner classify --limit 30 --strategy keyword-first
-
-# 对话结构化：粗修 haiku + 精修 sonnet，5 份一批
-python -m zxf_runner structure --content-type dialog --limit 5
-
-# 换成 haiku 精修（省钱）
-python -m zxf_runner structure --content-type dialog --limit 5 --refine-model haiku
-
-# 用 GPT
-python -m zxf_runner structure --content-type dialog --limit 5 \
-    --draft-model gpt-cheap --refine-model gpt-top
-
-# 独白/专题
-python -m zxf_runner structure --content-type monolog --limit 5
-
-# 单 BV
-python -m zxf_runner structure --bv BV1xxxxxxxxx
-
-# 并发 5 份（ThreadPool）
-python -m zxf_runner structure --content-type dialog --limit 10 --parallel 5
-
-# 历史成品回填 index
 python -m zxf_runner reconcile
-
-# 进度
 python -m zxf_runner report
 ```
 
-## 模型别名
+### Mode B（无 key）工作流
+
+这些命令**不直接处理一份转录**，而是把活拆成"工作包"丢给主 agent。主 agent 读 packet 里的 prompt+原文，产出 JSON 写到 target_path，再调 runner 校验和入库。
+
+```bash
+# 1. 出对话粗修工作包
+python -m zxf_runner prepare-dialog-draft --limit 5       # 或 --bv BVxxx
+
+# （主 agent 按 packet 产 JSON → Write → check）
+python -m zxf_runner check --path <draft_json_path>
+
+# 2. 粗修全过 → 出精修工作包（一次多份保横向一致）
+python -m zxf_runner prepare-dialog-refine --bvs BV1,BV2,BV3 --refine-model-name claude-code
+
+# （主 agent 一次精修 N 份 → Write 每份 → check 每份）
+# 3. 全过后逐份入库
+python -m zxf_runner finalize --bv BVxxx --status done
+
+# 失败走 needs_review
+python -m zxf_runner finalize --bv BVxxx --status needs_review --reason "JSON 解析失败"
+
+# 独白/专题（无精修阶段）
+python -m zxf_runner prepare-monolog --limit 5
+# ...write, check, finalize...
+```
+
+每个 CLI 的 adapter（`adapters/claude-code/SKILL.md` 等）已把这串流程写成主 agent 能直接跟随的步骤。
+
+### Mode A（有 key）一键跑
+
+```bash
+python -m zxf_runner structure --content-type dialog --limit 5
+python -m zxf_runner structure --content-type dialog --limit 5 --refine-model haiku
+python -m zxf_runner structure --content-type dialog --limit 10 --parallel 5
+python -m zxf_runner structure --bv BVxxx
+python -m zxf_runner structure --content-type monolog --limit 5
+python -m zxf_runner structure --content-type dialog --limit 5 \
+    --draft-model gpt-cheap --refine-model gpt-top
+```
+
+## 模型别名（仅 Mode A 用）
 
 见 `config/models.yaml`，默认提供：
 

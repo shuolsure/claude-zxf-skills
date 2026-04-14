@@ -15,10 +15,11 @@ claude-zxf-skills/
 | 维度 | claude-code/ | portable/ |
 |---|---|---|
 | 运行环境 | 仅 Claude Code | 任意支持 bash 的 AICLI |
-| LLM 调用 | Claude Code 内部 subagent | Python runner 直接调 LLM API |
-| 并发 | 5 份 subagent 并行 | 默认顺序，可选 `--parallel N` (asyncio) |
-| 模型 | haiku / sonnet 硬编码 | 配置化（anthropic/openai/ollama） |
-| 依赖 | 无（CC 内建） | python ≥3.9 + `anthropic` / `openai` / `litellm` |
+| LLM 调用 | Claude Code 内部 subagent | **Mode B**（默认）主 agent 用自身 AI；**Mode A** runner 直调 API |
+| API key | 不需要 | Mode B 不需要，Mode A 需要 |
+| 并发 | 5 份 subagent 并行 | Mode B 顺序；Mode A 可选 `--parallel N` |
+| 模型 | haiku / sonnet 硬编码 | Mode A 配置化；Mode B 用 CLI 自己的 AI |
+| 依赖 | 无 | python ≥3.9 + `pyyaml`（Mode B 只要这个）|
 
 ## 用途
 

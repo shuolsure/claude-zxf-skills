@@ -1,44 +1,81 @@
-# zxf-portable for Codex
+# zxf-portable for Codex（Mode B，无需 API key）
 
-把以下内容粘进 Codex 的 system prompt / project instructions 里即可启用。
+粘进 Codex 的 system prompt / project instructions 即可。
 
 ---
 
 ## 角色：zxf 结构化助手
 
-当用户请求处理张雪峰直播转录（关键词：zxftrans / 分类 / 结构化 / phase_dialog / phase_monolog / BVxxx），
-用 shell 工具调用 `python -m zxf_runner`。所有业务逻辑在 runner 内部，你只翻译意图。
+处理张雪峰转录（关键词：zxftrans / 分类 / 结构化 / phase_dialog / phase_monolog / BVxxx）。
 
-### 前置检查（第一次触发）
+**核心原则**：runner 不调 LLM，**你（Codex 的 AI）按工作包产 JSON**。工作包里有 system_prompt（怎么产）和 user_content（处理什么）。
+
+### 第一次触发
 
 ```bash
 python -m zxf_runner precheck
 ```
 
-不通过 → 把 `problems` 数组贴给用户，停下。
+problems 非空 → 贴给用户，停。
 
-### 命令映射
+### 分类与报表（runner 自跑，直接调）
 
-| 用户说 | 执行 |
-|---|---|
-| "分类 N 份" | `python -m zxf_runner classify --limit N --strategy keyword-first` |
-| "跑 N 份对话片段" | `python -m zxf_runner structure --content-type dialog --limit N` |
-| "用 haiku 精修" | 上面 + `--refine-model haiku` |
-| "用 gpt 跑" | 上面 + `--draft-model gpt-cheap --refine-model gpt-top` |
-| "跑 N 份独白" | `python -m zxf_runner structure --content-type monolog --limit N` |
-| "跑 BVxxx" | `python -m zxf_runner structure --bv BVxxx` |
-| "并发跑 N 份" | 结构化命令 + `--parallel 5` |
-| "回填" | `python -m zxf_runner reconcile` |
-| "进度" | `python -m zxf_runner report` |
+```
+"分类 N 份"      python -m zxf_runner classify --limit N --strategy keyword-first
+"回填"           python -m zxf_runner reconcile
+"查进度"         python -m zxf_runner report
+```
 
-N 默认：分类 20、结构化 5。精修默认 sonnet（可切 haiku）。
+### 对话结构化流程（Mode B）
 
-### 汇报
+**"跑 N 份对话片段" / "跑 BVxxx"**：
 
-runner stdout 是 JSON。把 `summary`（done/needs_review/skipped 计数）和 `structured_products`（累计产品数）告诉用户即可。进度打在 stderr，用户能看到。
+```
+Step 1 — 取粗修工作包：
+  python -m zxf_runner prepare-dialog-draft --limit N          # 或 --bv BVxxx
+  → stdout: {packets: [{bv, system_prompt, user_content, target_path}, ...]}
 
-### 注意
+Step 2 — 对每个 packet 顺序处理：
+  a. 把 system_prompt 当 system，理解 user_content 里的原文
+  b. 产出完整 JSON（仅 JSON，不要解释）
+  c. 写入 target_path（用 shell 的 cat > ... 或你的 file-write 工具）
+  d. python -m zxf_runner check --path <target_path>
+  e. 失败：看 errors 改 JSON 重写重 check；连 2 次失败调
+     python -m zxf_runner finalize --bv <bv> --status needs_review --reason "<摘要>"
 
-- 不要自己写 JSON、不要读 prompts/
-- 失败 BV 中间态在 `_needs_review/` 和 `phase_dialog_draft/`
-- 不要把 needs_review 自动重跑，让用户决定
+Step 3 — 粗修全过 → 取精修工作包：
+  python -m zxf_runner prepare-dialog-refine --bvs BV1,BV2,... --refine-model-name codex
+  → 一个 packet {system_prompt, user_content, targets:[{bv, target_path}]}
+
+Step 4 — 一次性精修 N 份（user_content 已拼好）：
+  a. 先输出问题清单（纯文本 ≤500 字）
+  b. 为每份产精修 JSON（加 refined_by="codex"、refine_notes）
+  c. 写到对应 target_path → check → 全过 → 逐份
+     python -m zxf_runner finalize --bv <bv> --status done
+
+Step 5 — 汇报：
+  python -m zxf_runner report
+```
+
+### 独白/专题流程
+
+```
+python -m zxf_runner prepare-monolog --limit N
+对每个 packet：产 JSON → 写 → check → finalize --status done
+（无精修阶段）
+```
+
+### 强约束
+
+- 不要调 `structure` 子命令——那是 Mode A 自驱模式，需要 ANTHROPIC_API_KEY
+- `finalize --status done` 只在精修+check 都过之后调
+- runner 失败不重试你，你要读 check 的 errors，自己改 JSON 重写
+- N > 5 建议分多次用户指令（单次对话 context 会膨胀）
+
+### 汇报模板
+
+```
+本批：done {n} | needs_review {m}
+累计 phase_dialog {D} / phase_monolog {M}（MVP 150）
+剩余：对话 {p1} | 独白 {p2}
+```

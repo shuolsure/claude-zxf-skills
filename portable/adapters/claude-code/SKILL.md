@@ -1,63 +1,115 @@
 ---
 name: zxf-portable
-description: 张雪峰转录的通用结构化 skill（通用版 runner 薄壳）。当用户说"分类 N 份"、"跑 N 份对话片段"、"用 haiku 精修"、"跑 BVxxx"、"查进度"、或提及 zxftrans/phase_dialog/phase_monolog 时使用。所有业务逻辑在 python runner 里，主 agent 只负责翻译意图到命令行。不要派 subagent——runner 内部已处理并发。
+description: 张雪峰转录结构化 skill（通用版 runner 薄壳，**无需 API key**）。当用户说"分类 N 份"、"跑 N 份对话片段"、"跑 N 份独白"、"跑 BVxxx"、"查进度"、或提及 zxftrans/phase_dialog/phase_monolog 时使用。runner 不调 LLM，由主 agent 用自身 AI 能力按工作包产出 JSON。
 ---
 
-# zxf-portable（Claude Code 适配）
+# zxf-portable（Claude Code 适配，Mode B 默认）
 
 ## 定位
 
-这是通用版 skill 的 Claude Code 适配层。真正的业务逻辑在 `portable/zxf_runner/`（同仓库），主 agent 只做一件事：把用户的中文意图翻译成 `python -m zxf_runner` 命令，用 Bash 跑，转述 stdout。
-
-**不要**：派 subagent、读 prompts/ 内容、手写 JSON。这些都是 runner 的事。
+runner 只做**工作包分发 + 校验 + 索引管理**。真正"读原文、理解、产 JSON"由主 agent 用 Claude Code 内置 AI 完成——**不需要 ANTHROPIC_API_KEY**。
 
 ## 前置
 
-- 用户必须先跑过 `pip install -e <仓库>/portable`
-- 环境变量 `ANTHROPIC_API_KEY`（必需）、`OPENAI_API_KEY`（可选）要在用户 shell 里
+第一次触发先跑：
 
-第一次触发时先跑 `python -m zxf_runner precheck`，不通过直接告诉用户缺什么。
+```bash
+python -m zxf_runner precheck
+```
 
-## 触发词 → 命令映射
+## 触发词 → 命令
 
 | 用户说 | 执行 |
 |---|---|
-| "分类 N 份" / "keyword-first 跑 N 份" | `python -m zxf_runner classify --limit N --strategy keyword-first` |
-| "全量分类" | `python -m zxf_runner classify --limit 9999 --strategy keyword-first` |
-| "跑 N 份对话片段" | `python -m zxf_runner structure --content-type dialog --limit N` |
-| "用 haiku 精修跑 N 份" | 上面命令 + `--refine-model haiku` |
-| "用 GPT 跑 N 份" | 上面命令 + `--draft-model gpt-cheap --refine-model gpt-top` |
-| "跑 N 份独白片段" | `python -m zxf_runner structure --content-type monolog --limit N` |
-| "跑 BVxxx" | `python -m zxf_runner structure --bv BVxxx` |
-| "并发跑 N 份" | 结构化命令 + `--parallel 5` |
-| "回填历史成品" | `python -m zxf_runner reconcile` |
-| "查进度" / "进度到哪了" | `python -m zxf_runner report` |
+| "分类 N 份" | `python -m zxf_runner classify --limit N --strategy keyword-first` |
+| "跑 N 份对话片段" | Mode B 对话流程（见下） |
+| "跑 BVxxx" | Mode B 单 BV |
+| "跑 N 份独白" | Mode B 独白流程（见下） |
+| "回填" | `python -m zxf_runner reconcile` |
+| "查进度" | `python -m zxf_runner report` |
 
 N 默认：分类 20、结构化 5。
 
-## 执行约定
+## Mode B 对话全流程（主 agent 按步执行）
 
-- 用 Bash 工具跑命令，**不要**派 subagent（runner 内部并发够了）
-- runner 把进度打到 stderr，结束给 stdout JSON 汇报
-- 单条命令超过 10 分钟（比如 limit=30 还在 parallel=1）：建议用户加 `--parallel 5` 或拆批
-- 失败 BV 在 stdout results 里会有 `status: "needs_review"`，告诉用户去 `_needs_review/` 看中间态
+### Step 1：取粗修工作包
+
+```bash
+python -m zxf_runner prepare-dialog-draft --limit N
+# 或单份：--bv BVxxx
+```
+
+stdout 返回 `{count, instructions, packets: [{bv, system_prompt, user_content, target_path}, ...]}`。
+
+### Step 2：对每个 packet 产粗修 JSON
+
+**主 agent 自己做**（不派 subagent，顺序处理一份一份）：
+
+1. 读取 `packet.system_prompt`（当 system 理解）和 `packet.user_content`（里面含原文）
+2. 在自己的思考里按 system prompt 产出完整 JSON
+3. 用 Write 工具把 JSON 写到 `packet.target_path`（覆盖）
+4. Bash：`python -m zxf_runner check --path <target_path>`
+5. 校验失败 → 看 errors，改 JSON 重写，再 check；连续 2 次失败则走 needs_review：
+   `python -m zxf_runner finalize --bv <bv> --status needs_review --reason <errors 摘要>`
+
+### Step 3：取精修工作包
+
+粗修全过后：
+
+```bash
+python -m zxf_runner prepare-dialog-refine --bvs BV1,BV2,... --refine-model-name claude-code
+```
+
+返回一个 packet：`{system_prompt, user_content, targets: [{bv, target_path}, ...]}`。`user_content` 已经把 N 份 draft 按顺序拼好。
+
+### Step 4：产精修 JSON
+
+主 agent 按 system_prompt 一次性精修 N 份：
+
+1. 先给用户输出问题清单（≤500 字纯文本，摘要即可）
+2. 为每份产出精修 JSON，Write 到对应 `targets[i].target_path`
+3. 每份里加 `refined_by: "claude-code"` 和 `refine_notes`
+4. 逐份 `check`
+5. 全过 → 逐份 `finalize --bv <bv> --status done`
+
+### Step 5：汇报
+
+跑 `python -m zxf_runner report`，告诉用户：
+
+```
+本批：done {n} | needs_review {m}
+累计：phase_dialog {D} / phase_monolog {M}（MVP 150）
+剩余：对话片段 pending {p1} | 独白 pending {p2}
+```
+
+## Mode B 独白流程（更简单）
+
+```bash
+python -m zxf_runner prepare-monolog --limit N
+```
+
+对每个 packet：产 JSON → Write → check → `finalize --status done`。无精修阶段。
+
+## 关键约束
+
+- 一次对话处理 N 份，每份 1-2 次 LLM 思考 + 精修 1 次，context 会膨胀。**N > 5 建议分多次用户指令**。
+- Mode B runner **从不调 LLM** —— 看到 "API key" 相关报错就是用错了命令（可能误调 `structure`）。
+- `finalize --status done` **只在精修 + check 都通过后**调。粗修通过不等于完成。
+- 不要用 `structure` 子命令（那是 Mode A，需 API key）。
 
 ## 汇报模板
 
-跑完后给用户看：
-
 ```
-已执行：{命令}
+已完成：{n}/{N} 份（{content_type}）
 
-{runner 返回的 summary JSON 精简呈现}
+{若有失败} needs_review：{bv1, bv2}（原因：{reason}）
 
-本批 done {n} | needs_review {n} | skipped {n}
-
-累计产品（调 report 补充）：phase_dialog {x} / phase_monolog {y} / MVP 150
+累计产品（phase_dialog {D} / phase_monolog {M}，MVP 150）
+索引剩余：对话 {p1} | 独白 {p2}
 ```
 
 ## 边界
 
-- 不改 prompts / config（让用户手改）
-- 不吞错：runner 报错就把 stderr 最后几行给用户
-- 不自动把 needs_review 再跑一次——人工决定
+- 不改 prompts / config（让用户手改 `portable/prompts/` 或 `portable/config/`）
+- 不自动重跑 needs_review
+- 不做分类判定（那是 runner 里 `classify` 的启发式逻辑，runner 自己能跑）

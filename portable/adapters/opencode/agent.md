@@ -1,6 +1,6 @@
-# zxf-portable for opencode
+# zxf-portable for opencode（Mode B，无需 API key）
 
-在 opencode 里，这是一个 agent 定义（或 plugin prompt）。放进 `.opencode/agents/zxf-portable.md` 或等价位置。
+opencode agent 定义。放 `.opencode/agents/zxf-portable.md`。
 
 ---
 
@@ -8,41 +8,73 @@
 zxf-portable
 
 ## description
-张雪峰转录结构化。识别：分类 / 结构化 / zxftrans / phase_dialog / phase_monolog / BVxxx。
+张雪峰转录结构化。触发：分类/结构化/zxftrans/phase_dialog/phase_monolog/BVxxx。**无需 API key**——runner 拆活，你（opencode AI）产 JSON。
+
+## tools
+- bash
+- read
+- write
 
 ## instructions
 
-调 `python -m zxf_runner` 完成所有工作。不要自行读 prompts、不要自行写 JSON——这些都是 runner 的责任。
+runner 不调 LLM。你按工作包用自己的能力产出 JSON。
 
-**首次触发** → `python -m zxf_runner precheck`。问题全报给用户。
+### 第一次触发
 
-**命令映射**：
-
-```
-分类 N 份                  python -m zxf_runner classify --limit N --strategy keyword-first
-跑 N 份对话片段             python -m zxf_runner structure --content-type dialog --limit N
-用 haiku 精修跑 N 份         + --refine-model haiku
-用 GPT 跑                   + --draft-model gpt-cheap --refine-model gpt-top
-跑 N 份独白                 python -m zxf_runner structure --content-type monolog --limit N
-跑 BVxxx                   python -m zxf_runner structure --bv BVxxx
-并发跑 N 份                 + --parallel 5
-回填                       python -m zxf_runner reconcile
-进度                       python -m zxf_runner report
+```bash
+python -m zxf_runner precheck
 ```
 
-默认：分类 20 / 结构化 5 / 精修 sonnet。
+### 直调（无需 LLM 参与）
 
-**汇报**：
-- stdout 有 JSON 汇总 —— 提取 summary + structured_products 告诉用户
-- stderr 有实时进度
-- 失败 BV 指向 `_needs_review/` 让用户去看
+- `"分类 N 份"` → `python -m zxf_runner classify --limit N --strategy keyword-first`
+- `"回填"` → `python -m zxf_runner reconcile`
+- `"查进度"` → `python -m zxf_runner report`
 
-## tools
-- shell (bash)
-- read (optional, 仅用于展示产物 JSON 给用户看)
+### 对话结构化（Mode B 核心）
 
-## 禁止
+```
+1) 取粗修工作包
+   python -m zxf_runner prepare-dialog-draft --limit N   # 或 --bv BVxxx
+   → {packets: [{bv, system_prompt, user_content, target_path}, ...]}
+
+2) 对每个 packet（顺序）：
+   - 把 system_prompt 当系统指令，按它理解 user_content
+   - 产出 JSON，Write 到 target_path
+   - bash: python -m zxf_runner check --path <target_path>
+   - 失败：看 errors 修 JSON 重写重 check；连 2 次失败调
+     python -m zxf_runner finalize --bv <bv> --status needs_review --reason "<摘要>"
+
+3) 粗修全过 → 精修
+   python -m zxf_runner prepare-dialog-refine --bvs BV1,BV2,... --refine-model-name opencode
+   → {system_prompt, user_content, targets: [{bv, target_path}]}
+
+4) 一次性精修 N 份：
+   - 先给用户输出问题清单（纯文本 ≤500 字）
+   - 为每份产精修 JSON（加 refined_by="opencode" + refine_notes）
+   - 写到对应 target_path → check → 全过 → 逐份 finalize --status done
+
+5) python -m zxf_runner report
+```
+
+### 独白流程
+
+```
+python -m zxf_runner prepare-monolog --limit N
+对每份：产 JSON → write → check → finalize --status done
+```
+
+### 禁止
+
+- 不要用 `structure` 子命令（Mode A，需 API key）
+- 不要在粗修通过后就 finalize done（精修没跑不算完）
 - 不要派子代理
-- 不要自己写 JSON
-- 不要读 prompts/ 内容
-- 不要把 needs_review 自动重跑
+- N > 5 建议拆多轮
+
+### 汇报模板
+
+```
+本批：done {n} | needs_review {m}
+累计 phase_dialog {D} / phase_monolog {M}（MVP 150）
+剩余：对话 {p1} | 独白 {p2}
+```
