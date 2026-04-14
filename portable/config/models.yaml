@@ -1,0 +1,28 @@
+# 模型别名 → provider/model 映射
+# runner 用 `--model <别名>` 选择；SDK 从环境变量读 key
+
+haiku:
+  provider: anthropic
+  model: claude-haiku-4-5-20251001
+  max_tokens: 8000
+
+sonnet:
+  provider: anthropic
+  model: claude-sonnet-4-6
+  max_tokens: 16000
+
+gpt-cheap:
+  provider: openai
+  model: gpt-4o-mini
+  max_tokens: 8000
+
+gpt-top:
+  provider: openai
+  model: gpt-5
+  max_tokens: 16000
+
+local:
+  provider: ollama
+  model: qwen2.5:14b
+  max_tokens: 8000
+  base_url: http://localhost:11434

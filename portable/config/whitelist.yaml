@@ -1,0 +1,60 @@
+# 各 type 白名单 + 长度约束。改白名单后不需改代码。
+
+profile_type:
+  - 省份
+  - 科类
+  - 年级
+  - 性别
+  - 选科组合
+  - 分数
+  - 分数类型
+  - 排名
+  - 考试节点
+  - 意向专业
+  - 备选专业
+  - 回避学科
+  - 学科优势
+  - 择业价值观
+  - 就业目标
+  - 咨询方身份
+  - 健康状况
+  - 家庭背景
+  - 学校
+  - 学校类型
+
+recommendation_type:
+  - 推荐专业
+  - 推荐学校
+  - 推荐路径
+  - 推荐规避
+  - 择校原则
+  - 择业原则
+  - 认知原则
+  - 升学建议
+  - 就业路径
+  - 就业前景
+  - 操作引导
+  - 风险提示
+
+knowledge_type:
+  - 行业事实
+  - 政策规则
+  - 专业类型
+  - 学科特性
+
+dialogue_type:
+  - B_qa
+  - B_emotional
+  - non_dialog
+
+signal:
+  - high
+  - medium
+  - low
+
+# 长度上限（字符数）
+limits:
+  profile_value: 12
+  recommendation_value: 12
+  knowledge_value: 40
+  quote_value: 30
